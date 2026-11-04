@@ -32,7 +32,7 @@ public class ReliabilityTests : IDisposable
     [InlineData("{ not json")]
     [InlineData("")]
     [InlineData("[]")]
-    [InlineData("{\"title\":\"x\",\"priority\":\"Urgent\"}")]
+    [InlineData("{\"title\":\"x\",\"priority\":\"Critical\"}")]
     [InlineData("{\"title\":\"x\",\"priority\":99}")]
     [InlineData("{\"title\":\"x\",\"dueDate\":\"2026-13-45\"}")]
     [InlineData("{\"title\":\"x\",\"dueDate\":\"not a date\"}")]
@@ -229,5 +229,44 @@ public class ReliabilityTests : IDisposable
         Assert.All(results, r => Assert.Equal(HttpStatusCode.Created, r.StatusCode));
         var all = (await _http.GetFromJsonAsync<List<TaskDto>>("/api/tasks", Json))!;
         Assert.Equal(20, all.Count);
+    }
+}
+
+public class CrossOriginTests() : TestBase(new ApiFactory())
+{
+    private HttpRequestMessage Req(HttpMethod m, string url, string? origin)
+    {
+        var r = new HttpRequestMessage(m, url);
+        if (origin is not null) r.Headers.Add("Origin", origin);
+        return r;
+    }
+
+    [Theory]
+    [InlineData("https://evil.example")]
+    [InlineData("null")]
+    [InlineData("http://localhost:9999")]
+    public async Task Writes_from_foreign_origins_are_refused_before_they_do_anything(string origin)
+    {
+        await CreateTask(new { title = "safe" });
+        Assert.Equal(HttpStatusCode.Forbidden, (await Http.SendAsync(Req(HttpMethod.Post, "/api/backups", origin))).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Http.SendAsync(Req(HttpMethod.Post, "/api/backups/taskflow-backup-20200101-000000.db/restore?confirm=true", origin))).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Http.SendAsync(Req(HttpMethod.Delete, "/api/tasks/completed", origin))).StatusCode);
+        Assert.Empty(Directory.Exists(Factory.BackupDir) ? Directory.GetFiles(Factory.BackupDir) : []);
+        Assert.Single(await Tasks());
+    }
+
+    [Theory]
+    [InlineData("http://localhost:5174")]
+    [InlineData("http://127.0.0.1:5174")]
+    public async Task Writes_from_the_app_origin_work(string origin)
+    {
+        Assert.Equal(HttpStatusCode.Created, (await Http.SendAsync(Req(HttpMethod.Post, "/api/backups", origin))).StatusCode);
+    }
+
+    [Fact]
+    public async Task Reads_and_origin_less_requests_are_unaffected()
+    {
+        Assert.Equal(HttpStatusCode.OK, (await Http.SendAsync(Req(HttpMethod.Get, "/api/tasks", "https://evil.example"))).StatusCode); // CORS stops the page reading it
+        Assert.Equal(HttpStatusCode.Created, (await Http.SendAsync(Req(HttpMethod.Post, "/api/backups", null))).StatusCode);
     }
 }

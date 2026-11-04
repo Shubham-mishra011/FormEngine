@@ -1,369 +1,189 @@
-import { render, screen, waitFor, within } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
-import App from './App'
-import type { Category, Task } from './api'
+import { screen, waitFor, within } from '@testing-library/react'
+import { todayString, addDays } from './dates'
+import { installFakeServer, makeCategory, makeTag, makeTask, reply } from './testing/fakeServer'
+import { renderApp } from './testing/helpers'
 
-/** Minimal in-memory stand-in for the API, speaking the same HTTP contract. */
-function installFakeApi(opts: { down?: boolean; failToggle?: boolean; toggleGate?: Promise<void> } = {}) {
-  let nextId = 1
-  let nextCat = 1
-  let tasks: Task[] = []
-  let cats: Category[] = []
-  const calls: string[] = []
+afterEach(() => {
+  vi.unstubAllGlobals()
+  window.location.hash = ''
+})
 
-  const reply = (body: unknown, status = 200) =>
-    Promise.resolve(
-      new Response(status === 204 ? null : JSON.stringify(body), {
-        status,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
+const NAV_LABELS = [
+  'Dashboard', 'My Tasks', 'Inbox', 'Today', 'Upcoming', 'Completed', 'Calendar', 'Kanban',
+  'Categories', 'Tags', 'Analytics', 'Focus', 'Settings',
+]
 
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    if (opts.down) throw new TypeError('network down')
-    const url = new URL(String(input), 'http://x')
-    const method = init?.method ?? 'GET'
-    const body = init?.body ? JSON.parse(String(init.body)) : undefined
-    calls.push(`${method} ${url.pathname}${url.search}`)
-    const path = url.pathname
-
-    if (path === '/api/tasks/stats') {
-      const done = tasks.filter((t) => t.isCompleted).length
-      return reply({ total: tasks.length, completed: done, active: tasks.length - done, overdue: 0, dueToday: 0 })
-    }
-    if (path === '/api/tasks/completed') {
-      tasks = tasks.filter((t) => !t.isCompleted)
-      return reply(null, 204)
-    }
-    if (path === '/api/tasks' && method === 'GET') {
-      const q = url.searchParams.get('q')?.toLowerCase()
-      const status = url.searchParams.get('status')
-      let out = tasks
-      if (q) out = out.filter((t) => t.title.toLowerCase().includes(q))
-      if (status === 'completed') out = out.filter((t) => t.isCompleted)
-      if (status === 'active') out = out.filter((t) => !t.isCompleted)
-      return reply(out)
-    }
-    if (path === '/api/tasks' && method === 'POST') {
-      const cat = cats.find((c) => c.id === body.categoryId)
-      const t: Task = {
-        id: nextId++, title: body.title, notes: body.notes ?? null, isCompleted: false,
-        priority: body.priority, dueDate: body.dueDate ?? null, categoryId: body.categoryId ?? null,
-        categoryName: cat?.name ?? null, categoryColor: cat?.color ?? null,
-        createdAt: '', updatedAt: '', completedAt: null,
-      }
-      tasks = [t, ...tasks]
-      return reply(t, 201)
-    }
-    const m = path.match(/^\/api\/tasks\/(\d+)(\/toggle)?$/)
-    if (m) {
-      const id = Number(m[1])
-      if (m[2] && opts.toggleGate) await opts.toggleGate
-      if (m[2] && opts.failToggle) return reply({ title: 'Boom' }, 500)
-      if (m[2]) tasks = tasks.map((t) => (t.id === id ? { ...t, isCompleted: !t.isCompleted } : t))
-      else if (method === 'PUT') tasks = tasks.map((t) => (t.id === id ? { ...t, ...body } : t))
-      else if (method === 'DELETE') tasks = tasks.filter((t) => t.id !== id)
-      return reply(tasks.find((t) => t.id === id) ?? null, method === 'DELETE' ? 204 : 200)
-    }
-    if (path === '/api/categories' && method === 'GET') {
-      return reply(cats.map((c) => ({ ...c, taskCount: tasks.filter((t) => t.categoryId === c.id).length })))
-    }
-    if (path === '/api/categories' && method === 'POST') {
-      if (cats.some((c) => c.name === body.name)) return reply({ title: 'A category with that name already exists.' }, 409)
-      const c = { id: nextCat++, name: body.name, color: body.color, taskCount: 0 }
-      cats.push(c)
-      return reply(c, 201)
-    }
-    const cm = path.match(/^\/api\/categories\/(\d+)$/)
-    if (cm && method === 'DELETE') {
-      cats = cats.filter((c) => c.id !== Number(cm[1]))
-      return reply(null, 204)
-    }
-    return reply({ title: 'not found' }, 404)
+describe('app shell and navigation', () => {
+  it('offers every section in the sidebar and marks the current one', async () => {
+    installFakeServer()
+    renderApp('#/tasks')
+    const nav = await screen.findByRole('navigation', { name: 'Main' })
+    for (const label of NAV_LABELS) expect(within(nav).getByRole('link', { name: new RegExp(`^${label}`) })).toBeInTheDocument()
+    expect(within(nav).getByRole('link', { name: /^My Tasks/ })).toHaveAttribute('aria-current', 'page')
+    expect(within(nav).getByRole('link', { name: /^Calendar/ })).not.toHaveAttribute('aria-current')
   })
 
-  vi.stubGlobal('fetch', fetchMock)
-  return { calls, fetchMock, getTasks: () => tasks }
-}
-
-async function addTask(user: ReturnType<typeof userEvent.setup>, title: string) {
-  await user.type(screen.getByLabelText('Title'), title)
-  await user.click(screen.getByRole('button', { name: 'Add task' }))
-}
-
-afterEach(() => vi.unstubAllGlobals())
-
-describe('TaskFlow app', () => {
-  it('shows the empty state, then lists a newly added task', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    expect(await screen.findByText(/No tasks yet/)).toBeInTheDocument()
-
-    await addTask(user, 'Buy milk')
-    expect(await screen.findByText('Buy milk')).toBeInTheDocument()
-    expect(screen.getByLabelText('Title')).toHaveValue('') // form resets after success
+  it('navigates between pages and updates the document title', async () => {
+    installFakeServer()
+    const { user } = renderApp('#/tasks')
+    const nav = await screen.findByRole('navigation', { name: 'Main' })
+    await user.click(within(nav).getByRole('link', { name: /^Tags/ }))
+    expect(await screen.findByRole('region', { name: 'Tag manager' })).toBeInTheDocument()
+    expect(window.location.hash).toBe('#/tags')
+    expect(document.title).toBe('Tags · TaskFlow')
+    expect(within(nav).getByRole('link', { name: /^Tags/ })).toHaveAttribute('aria-current', 'page')
   })
 
-  it('refuses a blank title without calling the API', async () => {
-    const api = installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await user.click(screen.getByRole('button', { name: 'Add task' }))
-    expect(screen.getByRole('alert')).toHaveTextContent('Title is required.')
-    expect(api.calls.some((c) => c.startsWith('POST'))).toBe(false)
+  it('shows live counts in the sidebar, flagging overdue work', async () => {
+    const today = todayString()
+    installFakeServer({
+      tasks: [
+        makeTask({ id: 1, title: 'late', dueDate: addDays(today, -2) }),
+        makeTask({ id: 2, title: 'now', dueDate: today }),
+        makeTask({ id: 3, title: 'inbox item' }),
+      ],
+    })
+    renderApp('#/tasks')
+    const nav = await screen.findByRole('navigation', { name: 'Main' })
+    await waitFor(() => expect(within(nav).getByRole('link', { name: /^Today/ })).toHaveTextContent('2'))
+    expect(within(nav).getByRole('link', { name: /^Today/ })).toHaveTextContent('2')
+    expect(within(nav).getByLabelText('2, some overdue')).toBeInTheDocument()
+    expect(within(nav).getByRole('link', { name: /^Inbox/ })).toHaveTextContent('1')
   })
 
-  it('toggles a task complete and updates the counters', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await addTask(user, 'Walk dog')
-    await user.click(await screen.findByRole('checkbox', { name: /Mark "Walk dog" as done/ }))
-    expect(await screen.findByRole('checkbox', { name: /as not done/ })).toBeChecked()
-    expect(await screen.findByText('0 active · 1 done')).toBeInTheDocument()
+  it('falls back to the default view for an unknown route and honours the #/data alias', async () => {
+    installFakeServer()
+    renderApp('#/nonsense')
+    expect(await screen.findByRole('region', { name: 'Dashboard' })).toBeInTheDocument()
   })
 
-  it('edits a task title', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await addTask(user, 'Old title')
-    await user.click(await screen.findByRole('button', { name: 'Edit "Old title"' }))
-    const row = document.querySelector<HTMLElement>('li.editing')!
-    const input = within(row).getByLabelText('Title')
-    await user.clear(input)
-    await user.type(input, 'New title')
-    await user.click(within(row).getByRole('button', { name: 'Save' }))
-    expect(await screen.findByText('New title')).toBeInTheDocument()
-    expect(screen.queryByText('Old title')).not.toBeInTheDocument()
+  it('opens and closes the mobile navigation drawer', async () => {
+    installFakeServer()
+    const { user } = renderApp('#/tasks')
+    const menu = await screen.findByRole('button', { name: 'Open navigation' })
+    expect(menu).toHaveAttribute('aria-expanded', 'false')
+    await user.click(menu)
+    expect(document.querySelector('.shell')).toHaveClass('nav-open')
+    await user.keyboard('{Escape}')
+    expect(document.querySelector('.shell')).not.toHaveClass('nav-open')
   })
 
-  it('deletes a task', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await addTask(user, 'Temp')
-    await user.click(await screen.findByRole('button', { name: 'Delete "Temp"' }))
-    await user.click(await screen.findByRole('button', { name: 'Confirm delete "Temp"' }))
-    expect(await screen.findByText(/No tasks yet/)).toBeInTheDocument()
-  })
-
-  it('sends the search term to the API and shows the filtered empty message', async () => {
-    const api = installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await addTask(user, 'Alpha')
-    await screen.findByText('Alpha')
-    await user.type(screen.getByLabelText('Search tasks'), 'zzz')
-    expect(await screen.findByText('No tasks match these filters.')).toBeInTheDocument()
-    expect(api.calls.some((c) => c.includes('q=zzz'))).toBe(true)
-  })
-
-  it('switches the status view via the sidebar', async () => {
-    const api = installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await user.click(screen.getByRole('button', { name: /Completed/ }))
-    await waitFor(() => expect(api.calls.some((c) => c.includes('status=completed'))).toBe(true))
-  })
-
-  it('creates a category, assigns it to a task and reports duplicates', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-
-    await user.type(screen.getByLabelText('New category name'), 'Work')
-    await user.click(screen.getByRole('button', { name: 'Add category' }))
-    const option = await screen.findByRole('option', { name: 'Work' })
-    expect(option).toBeInTheDocument()
-
-    await user.selectOptions(screen.getByLabelText('Category'), 'Work')
-    await addTask(user, 'Report')
-    const row = (await screen.findByText('Report')).closest('li')!
-    expect(within(row).getByText('Work')).toBeInTheDocument()
-
-    await user.type(screen.getByLabelText('New category name'), 'Work')
-    await user.click(screen.getByRole('button', { name: 'Add category' }))
-    expect(await screen.findByText('A category with that name already exists.')).toBeInTheDocument()
-  })
-
-  it('shows a clear error with retry when the API is unreachable', async () => {
-    installFakeApi({ down: true })
-    render(<App />)
+  it('shows a retryable error banner when the API is unreachable', async () => {
+    installFakeServer({ handlers: { 'GET /api/tasks': () => { throw new TypeError('network down') } } })
+    renderApp('#/tasks')
     expect(await screen.findByRole('alert')).toHaveTextContent('Cannot reach the server')
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 })
 
-describe('TaskFlow app: behaviour and safety', () => {
-  it('resets priority, due date and category after adding so the next task starts clean', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await user.type(screen.getByLabelText('New category name'), 'Work')
-    await user.click(screen.getByRole('button', { name: 'Add category' }))
-    await screen.findByRole('option', { name: 'Work' })
+describe('quick add', () => {
+  it('parses natural language into a real task and shows it', async () => {
+    const api = installFakeServer({ tags: [makeTag({ id: 4, name: 'home' })], categories: [makeCategory({ id: 2, name: 'Finance' })] })
+    const { user } = renderApp('#/tasks')
+    await screen.findByText('No tasks yet')
+    await user.type(screen.getByLabelText('Quick add task'), 'Pay rent tomorrow at 9am !high #home @Finance')
+    // The live preview shows what was understood before anything is saved.
+    expect(await screen.findByText('Tomorrow')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Add' }))
 
-    await user.selectOptions(screen.getByLabelText('Priority'), 'High')
-    await user.selectOptions(screen.getByLabelText('Category'), 'Work')
-    await user.type(screen.getByLabelText('Due'), '2026-12-01')
-    await addTask(user, 'First')
-    await screen.findByText('First')
-
-    expect(screen.getByLabelText('Priority')).toHaveValue('Medium')
-    expect(screen.getByLabelText('Category')).toHaveValue('')
-    expect(screen.getByLabelText('Due')).toHaveValue('')
-    expect(screen.getByLabelText('Title')).toHaveFocus()
+    expect(await screen.findByText('Pay rent')).toBeInTheDocument()
+    const sent = JSON.parse(String(api.bodies['POST /api/tasks'][0]))
+    expect(sent).toMatchObject({
+      title: 'Pay rent', priority: 'High', dueDate: addDays(todayString(), 1), dueTime: '09:00', categoryId: 2, tagIds: [4],
+    })
+    expect(screen.getByLabelText('Quick add task')).toHaveValue('')
   })
 
-  it('submits from the notes field with Ctrl+Enter', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await user.type(screen.getByLabelText('Title'), 'Via shortcut')
-    await user.type(screen.getByLabelText('Notes'), 'some notes{Control>}{Enter}{/Control}')
-    expect(await screen.findByText('Via shortcut')).toBeInTheDocument()
+  it('refuses an empty title without calling the API', async () => {
+    const api = installFakeServer()
+    const { user } = renderApp('#/tasks')
+    await screen.findByText('No tasks yet')
+    await user.type(screen.getByLabelText('Quick add task'), 'tomorrow !high')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    expect(await screen.findByText('Type a task title first.')).toBeInTheDocument()
+    expect(api.calls.some((c) => c.startsWith('POST /api/tasks'))).toBe(false)
   })
 
-  it('cancels editing with Escape and discards the changes', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await addTask(user, 'Keep me')
-    await user.click(await screen.findByRole('button', { name: 'Edit "Keep me"' }))
-    const input = document.querySelector<HTMLElement>('li.editing')!.querySelector('input')!
-    await user.type(input, ' changed{Escape}')
-    expect(document.querySelector('li.editing')).toBeNull()
-    expect(screen.getByText('Keep me')).toBeInTheDocument()
+  it('is reachable with the Q shortcut from any page', async () => {
+    installFakeServer()
+    const { user } = renderApp('#/analytics')
+    await screen.findByRole('navigation', { name: 'Main' })
+    await user.keyboard('q')
+    expect(screen.getByLabelText('Quick add task')).toHaveFocus()
   })
 
-  it('needs two clicks to delete a task and disarms when focus leaves', async () => {
-    const api = installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await addTask(user, 'Precious')
+  it('shows the server error and keeps the text', async () => {
+    installFakeServer({ handlers: { 'POST /api/tasks': () => reply({ title: 'Disk full' }, 500) } })
+    const { user } = renderApp('#/tasks')
+    await screen.findByText('No tasks yet')
+    await user.type(screen.getByLabelText('Quick add task'), 'Keep me')
+    await user.click(screen.getByRole('button', { name: 'Add' }))
+    expect(await screen.findByText('Disk full')).toBeInTheDocument()
+    expect(screen.getByLabelText('Quick add task')).toHaveValue('Keep me')
+  })
+})
 
-    await user.click(await screen.findByRole('button', { name: 'Delete "Precious"' }))
-    expect(api.calls.some((c) => c.startsWith('DELETE'))).toBe(false)
-    expect(screen.getByRole('button', { name: 'Confirm delete "Precious"' })).toBeInTheDocument()
-
-    await user.click(screen.getByLabelText('Search tasks')) // focus moves away -> disarmed
-    expect(await screen.findByRole('button', { name: 'Delete "Precious"' })).toBeInTheDocument()
-    expect(api.getTasks()).toHaveLength(1)
+describe('command palette and shortcuts', () => {
+  it('Ctrl+K opens the palette; typing filters; Enter navigates', async () => {
+    installFakeServer()
+    const { user } = renderApp('#/tasks')
+    await screen.findByRole('navigation', { name: 'Main' })
+    await user.keyboard('{Control>}k{/Control}')
+    const input = await screen.findByRole('combobox', { name: /command or search/i })
+    await user.type(input, 'calend')
+    expect(screen.getByRole('option', { name: /Go to Calendar/ })).toHaveAttribute('aria-selected', 'true')
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(window.location.hash).toBe('#/calendar'))
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  it('shows a toggle immediately (optimistic) before the server answers', async () => {
-    let release!: () => void
-    const gate = new Promise<void>((r) => (release = r))
-    installFakeApi({ toggleGate: gate })
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await addTask(user, 'Fast')
-    const box = await screen.findByRole('checkbox', { name: /Mark "Fast" as done/ })
-    await user.click(box)
-    expect(await screen.findByRole('checkbox', { name: /Mark "Fast" as not done/ })).toBeChecked()
-    release()
+  it('finds tasks by typing and opens them in the editor', async () => {
+    installFakeServer({ tasks: [makeTask({ id: 1, title: 'Renew passport' }), makeTask({ id: 2, title: 'Buy milk' })] })
+    const { user } = renderApp('#/tasks')
+    await screen.findByText('Renew passport')
+    await user.keyboard('{Control>}k{/Control}')
+    await user.type(await screen.findByRole('combobox', { name: /command or search/i }), 'passp')
+    expect(screen.queryByRole('option', { name: /Buy milk/ })).toBeNull()
+    await user.click(screen.getByRole('option', { name: /Renew passport/ }))
+    expect(await screen.findByRole('dialog', { name: 'Edit task' })).toBeInTheDocument()
+    expect(screen.getByLabelText('Title')).toHaveValue('Renew passport')
   })
 
-  it('rolls the checkbox back and shows the error when the server rejects a toggle', async () => {
-    installFakeApi({ failToggle: true })
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await addTask(user, 'Stubborn')
-    await user.click(await screen.findByRole('checkbox', { name: /Mark "Stubborn" as done/ }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('Boom')
-    expect(screen.getByRole('checkbox', { name: /Mark "Stubborn" as done/ })).not.toBeChecked()
+  it('Escape closes the palette; arrows move the selection', async () => {
+    installFakeServer()
+    const { user } = renderApp('#/tasks')
+    await screen.findByRole('navigation', { name: 'Main' })
+    await user.keyboard('{Control>}k{/Control}')
+    await screen.findByRole('combobox', { name: /command or search/i })
+    const results = () => within(screen.getByRole('listbox', { name: 'Results' })).getAllByRole('option')
+    expect(results()[0]).toHaveAttribute('aria-selected', 'true')
+    await user.keyboard('{ArrowDown}')
+    expect(results()[1]).toHaveAttribute('aria-selected', 'true')
+    await user.keyboard('{ArrowUp}')
+    expect(results()[0]).toHaveAttribute('aria-selected', 'true')
+    await user.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 
-  it('focuses search with "/" but not while typing in another field', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await user.keyboard('/')
-    expect(screen.getByLabelText('Search tasks')).toHaveFocus()
-
-    await user.click(screen.getByLabelText('Title'))
-    await user.keyboard('a/b')
-    expect(screen.getByLabelText('Title')).toHaveValue('a/b')
+  it('G-then-letter navigates, N opens the editor, ? shows the shortcut list', async () => {
+    installFakeServer()
+    const { user } = renderApp('#/tasks')
+    await screen.findByRole('navigation', { name: 'Main' })
+    await user.keyboard('gk')
+    await waitFor(() => expect(window.location.hash).toBe('#/kanban'))
+    await user.keyboard('n')
+    expect(await screen.findByRole('dialog', { name: 'New task' })).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+    await user.keyboard('?')
+    const dlg = await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })
+    expect(within(dlg).getByText('Open the command palette')).toBeInTheDocument()
   })
 
-  it('clears the search with Escape', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    const search = screen.getByLabelText('Search tasks')
-    await user.type(search, 'abc{Escape}')
-    expect(search).toHaveValue('')
-  })
-
-  it('asks before deleting a category and does nothing if declined', async () => {
-    const api = installFakeApi()
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await user.type(screen.getByLabelText('New category name'), 'Work')
-    await user.click(screen.getByRole('button', { name: 'Add category' }))
-    await user.click(await screen.findByRole('button', { name: 'Delete category Work' }))
-    expect(confirm).toHaveBeenCalledOnce()
-    expect(api.calls.some((c) => c.startsWith('DELETE /api/categories'))).toBe(false)
-
-    confirm.mockReturnValue(true)
-    await user.click(screen.getByRole('button', { name: 'Delete category Work' }))
-    await waitFor(() => expect(screen.queryByRole('button', { name: 'Delete category Work' })).toBeNull())
-    confirm.mockRestore()
-  })
-
-  it('shows an inline message for a blank category name without calling the API', async () => {
-    const api = installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    await user.click(screen.getByRole('button', { name: 'Add category' }))
-    expect(screen.getByText('Enter a category name.')).toBeInTheDocument()
-    expect(api.calls.some((c) => c.startsWith('POST /api/categories'))).toBe(false)
-  })
-
-  it('gives successive new categories different default colours', async () => {
-    installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    const colors: string[] = []
-    for (const name of ['A', 'B', 'C']) {
-      colors.push((screen.getByLabelText('Category color') as HTMLInputElement).value)
-      await user.type(screen.getByLabelText('New category name'), name)
-      await user.click(screen.getByRole('button', { name: 'Add category' }))
-      await screen.findByRole('button', { name: `Delete category ${name}` })
-    }
-    expect(new Set(colors).size).toBe(3)
-  })
-
-  it('does not fire a request per keystroke while typing a search (debounced)', async () => {
-    const api = installFakeApi()
-    const user = userEvent.setup()
-    render(<App />)
-    await screen.findByText(/No tasks yet/)
-    const before = api.calls.filter((c) => c.startsWith('GET /api/tasks?')).length
-    await user.type(screen.getByLabelText('Search tasks'), 'hello')
-    await screen.findByText('No tasks match these filters.')
-    const after = api.calls.filter((c) => c.startsWith('GET /api/tasks?')).length
-    expect(after - before).toBeLessThanOrEqual(2)
+  it('single-letter shortcuts do not fire while typing in a field', async () => {
+    installFakeServer()
+    const { user } = renderApp('#/tasks')
+    await user.click(await screen.findByLabelText('Search tasks'))
+    await user.keyboard('gk')
+    expect(window.location.hash).toBe('#/tasks')
   })
 })

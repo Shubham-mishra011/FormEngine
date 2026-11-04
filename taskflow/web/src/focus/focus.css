@@ -1,0 +1,25 @@
+.focus-mini { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.7rem; border-radius: 999px; background: var(--accent-soft); color: var(--accent); text-decoration: none; font-weight: 600; font-size: 0.85rem; border: 1px solid var(--accent); }
+.focus-mini.paused { background: var(--warn-soft); color: var(--warn); border-color: var(--warn); }
+.focus-mini-time { font-variant-numeric: tabular-nums; }
+
+.focus-card { display: grid; justify-items: center; gap: 0.9rem; padding: 1.2rem 1rem; }
+.focus-card .tabs { justify-self: stretch; justify-content: center; }
+.focus-ring { position: relative; width: min(260px, 70vw); aspect-ratio: 1; }
+.focus-ring svg { width: 100%; height: 100%; display: block; }
+.ring-track { fill: none; stroke: var(--border); stroke-width: 10; }
+.ring-value { fill: none; stroke: var(--accent-bg); stroke-width: 10; stroke-linecap: round; }
+.ring-label { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; gap: 0.1rem; }
+.ring-time { font-size: clamp(2.2rem, 12vw, 3.4rem); font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.ring-sub { color: var(--muted); font-size: 0.9rem; }
+.focus-task { display: grid; gap: 0.2rem; font-size: 0.8rem; color: var(--muted); width: min(380px, 100%); }
+.focus-task select { width: 100%; }
+.focus-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center; }
+.focus-note { text-align: center; max-width: 520px; margin: 0; }
+.focus-kpis { margin-top: 0.5rem; }
+.focus-chart svg { min-width: 480px; }
+.session-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.4rem; }
+.session-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 0; padding: 0.5rem 0.8rem; }
+.session-main { flex: 1; min-width: 8rem; overflow-wrap: anywhere; }
+.kind-pill { font-size: 0.75rem; font-weight: 600; padding: 0.1rem 0.55rem; border-radius: 999px; border: 1px solid var(--border); }
+.kind-pill.k-Focus { color: var(--accent); border-color: var(--accent); }
+.kind-pill.k-ShortBreak, .kind-pill.k-LongBreak { color: var(--ok); border-color: var(--ok); }

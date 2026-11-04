@@ -1,36 +1,47 @@
 # TaskFlow roadmap
 
-Written against the code as of the stabilisation sprint (API: 49 tests, web: 24 tests, 28 browser checks).
-"Compatible" means: existing endpoints keep their shape, existing rows stay valid, and the change ships
-as an additive EF migration (new tables, or new nullable / defaulted columns).
+Reflects the code as it is now (release 1.0.0). "Done" means implemented **and** covered by automated tests; see
+[docs/IMPLEMENTATION_PROGRESS.md](docs/IMPLEMENTATION_PROGRESS.md) for the test counts and the browser-test record.
 
-Current schema: `Tasks` (Id, Title, Notes, IsCompleted, Priority, DueDate, CategoryId, CreatedAt, UpdatedAt,
-CompletedAt) and `Categories` (Id, Name NOCASE-unique, Color). Task DTOs are records; adding fields is
-backwards compatible for the current client, which ignores unknown properties.
+## Delivered
 
-## Priority order
+| # | Area | State | Notes |
+|---|------|-------|-------|
+| 1 | Import / export / backup / restore | Done | JSON export **v2** (reads v1), CSV, validated import with preview and duplicate detection, snapshots (`VACUUM INTO`, never overwritten), transactional **replace-all restore** with automatic safety snapshot, additive "preview restore". |
+| 2 | Dark / light / system themes | Done | Tokens in `index.css`; choice persisted; contrast verified in the browser tests. |
+| 3 | Productivity analytics | Done | Daily / weekly / monthly trends, streaks, distributions, overdue stats – all from stored timestamps. |
+| 4 | Subtasks | Done | One level (no self-reference, so no cycles); progress on the parent; kept on completion, import and export. |
+| 5 | Tags | Done | Many per task, colours, filter + search (`#tag`), deleting a tag never deletes tasks. |
+| 6 | Calendar | Done | Month / week / day, drag-and-drop + keyboard rescheduling, create-from-day, filters, overdue / upcoming / unscheduled. |
+| 7 | Kanban | Done | To Do / In Progress / Done with persisted order (`SortOrder`), drag-and-drop + buttons. `IsCompleted ⇔ Status = Done` is enforced in one place. |
+| 8 | Focus timer | Done | Persisted, clock-based; sessions linked to tasks; statistics; honest about background-tab throttling. |
+| 9 | Reminders / notifications | Done within browser limits | Reminders fire only while a tab is open (see below). |
+| 10 | Recurring tasks | Done | Calculator unit tests + API tests (month-end, leap years, missed occurrences, limits, races, export/import). |
+| 11 | Advanced task management | Done | Priority incl. Urgent, start/due date + time, estimates, pin/favorite, duplicate, bulk actions, attachments, activity history, recently-modified sort. |
+| 12 | Dashboard, command palette, quick add, settings, responsive shell | Done | Customisable widgets; `Ctrl+K`; natural-language quick add; 390 px layout verified. |
 
-| # | Feature | Why here | Schema change | API compatible? | Size |
-|---|---------|----------|---------------|-----------------|------|
-| 1 | **Import / export & backup** | A safety net before any schema work. Also the only protection against losing `taskflow.db`. | None | Yes. New endpoints only: `GET /api/export` (JSON), `POST /api/import` (validate, then insert in one transaction), `POST /api/backup` (`VACUUM INTO` a timestamped file under `E:\FormEngine\data\backups`). | S |
-| 2 | **Dark / light theme toggle** | Colours are already CSS variables and dark mode already follows the OS. Add a `data-theme` override persisted in `localStorage`. | None | Frontend only | S |
-| 3 | **Productivity analytics** | `CreatedAt` and `CompletedAt` already exist, so completed-per-day, average time-to-complete and overdue trends need no new data. | None | Yes. New read-only `GET /api/stats/daily?from&to`. | M |
-| 4 | **Subtasks** | The most requested to-do feature. Self-contained. | New `Subtasks` table (Id, TaskId FK cascade, Title, IsCompleted, SortOrder) | Yes. Add optional `subtaskTotal` / `subtaskDone` to `TaskDto`; subtask CRUD under `/api/tasks/{id}/subtasks`. Decide: completing the last subtask does not auto-complete the task (explicit beats surprising). | M |
-| 5 | **Tags / labels** | Orthogonal to categories (many per task). | New `Tags` and `TaskTags` join table; tag names NOCASE-unique | Yes. Add `tags` to `TaskDto`; new `tagId` list filter; `TaskInput.tagIds` optional. | M |
-| 6 | **Calendar view** | Pure presentation over `DueDate`. | None | Yes if `GET /api/tasks` gains optional `dueFrom` / `dueTo` filters (additive). | M |
-| 7 | **Kanban with drag-and-drop** | Needs a notion of ordering and a third state. | `Tasks.SortOrder` (int, default 0) and optionally `Status` (Todo/Doing/Done) mapped so `IsCompleted == (Status == Done)` | Mostly. Keep `isCompleted` as the source of truth for existing clients; add `status` and `sortOrder`. The toggle endpoint must keep both consistent. Use pointer events or `@dnd-kit` (new dependency), and make it keyboard-accessible. | L |
-| 8 | **Focus timer** | Client-side timer is trivial; value comes from linking sessions to tasks. | Optional `FocusSessions` (TaskId?, StartedAt, Seconds) | Yes | M |
-| 9 | **Local reminders** | Needs a browser permission flow and only works while a tab is open unless a service worker is added. | `Tasks.ReminderAt` nullable | Yes | M |
-| 10 | **Recurring tasks** | Highest semantic risk: what does "complete" mean, what about time zones and missed occurrences, and where does the next instance's `CreatedAt` come from? | `Tasks.RecurrenceRule` nullable (e.g. `daily`, `weekly:mon,wed`, `monthly:15`) and `RecurrenceParentId` nullable | Yes, but `PATCH .../toggle` gains a side effect (spawns the next instance). Needs a design decision and its own tests first. | L |
+## Not done / deliberately out of scope
 
-## Notes on sequencing
-- Do 1 before 4, 5, 7, 9 or 10, since each of those migrates existing data.
-- 4 and 5 share the pattern "child rows loaded with the task list"; add `Include` or a projection once and reuse it. The list endpoint currently sorts in memory, which is fine for a personal list but should be revisited if tasks reach the tens of thousands.
-- 3, 6 and 8 reuse the same date helpers; keep `dates.ts` the single place that interprets due dates as plain calendar dates, not instants.
-- Every migration should ship with a "migrate a seeded old-schema database" test, like `Migrating_an_existing_database_preserves_data_and_resolves_case_duplicates`.
+* **Reminders while the browser is closed.** Needs an always-on process or a push service. A Windows scheduled task or tray app that polls
+  `POST /api/notifications/sync` and raises a toast would be the next step (still local, no paid service).
+* **Attachments in backups.** Snapshots and JSON exports carry attachment *records*; the files live in `E:\FormEngine\data\attachments`. A zip bundle export would close this.
+* **Server-side paging.** The UI loads all tasks. Fine for personal use; revisit if lists reach tens of thousands (the API already has `limit`, `status`, `q`, `dueFrom/dueTo`).
+* **Multi-device sync, accounts, sharing.** Out of scope for a single-user local app.
+* **Per-user preferences in the database.** Preferences are browser `localStorage`; moving them server-side would let them survive a browser change.
+* **Conflict detection.** Two tabs editing one task: last save wins.
+* **Undo for delete.** Deletion is confirmed instead of undoable.
 
-## Known limitations of the current foundation
-- Single user, no authentication. The API is meant to bind to localhost only; do not expose it publicly as is.
-- "Today" and "overdue" use the API host's local clock. The browser and the API must be on the same machine or time zone.
-- The connection string in `appsettings.json` is an absolute `E:/FormEngine/data/taskflow.db` path (deliberate, for the E: requirement). Override with `ConnectionStrings__Default`.
-- There is no undo for delete; single-task delete is two-step instead.
+## Ideas worth considering next
+
+1. Windows scheduled-task notifier for closed-browser reminders.
+2. ZIP export/import bundle including attachments.
+3. Natural-language dates in the task editor's date fields (the quick-add parser already exists in `web/src/quickAdd.ts`).
+4. Saved filters / smart lists.
+5. Sub-task reordering by drag-and-drop (the `SortOrder` column already exists).
+
+## Engineering rules that remain in force
+
+* Every schema change is an additive EF migration with a "seed an old database, upgrade, assert nothing is lost" test.
+* No migration is applied to the real database without a copy on E: first (`start.ps1` does this daily; do it by hand before risky changes).
+* Design-time `dotnet ef` commands run against a scratch database.
+* Everything – tools, caches, temp, builds, databases, backups – stays on E:.

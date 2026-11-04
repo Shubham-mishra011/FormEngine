@@ -4,6 +4,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using TaskFlow.Api.Dtos;
 using TaskFlow.Api.Models;
 
@@ -13,29 +15,57 @@ namespace TaskFlow.Tests;
 public sealed class ApiFactory : WebApplicationFactory<Program>
 {
     public string DbPath { get; }
-    private readonly bool _keepDb;
+    public string BackupDir { get; }
+    public string AttachDir { get; } = Path.Combine(Path.GetTempPath(), $"taskflow-test-files-{Guid.NewGuid():N}");
+    public FixedTimeProvider? Clock { get; }
+    private readonly bool _keep;
+    private readonly bool _ownsBackupDir;
 
     /// <param name="dbPath">Reuse an existing file (to test restarts); the caller then owns cleanup.</param>
-    public ApiFactory(string? dbPath = null)
+    /// <param name="backupDir">Reuse a backup folder; defaults to a private temp folder (never the real one).</param>
+    public ApiFactory(string? dbPath = null, string? backupDir = null, FixedTimeProvider? clock = null)
     {
         DbPath = dbPath ?? Path.Combine(Path.GetTempPath(), $"taskflow-test-{Guid.NewGuid():N}.db");
-        _keepDb = dbPath is not null;
+        BackupDir = backupDir ?? Path.Combine(Path.GetTempPath(), $"taskflow-test-backups-{Guid.NewGuid():N}");
+        _ownsBackupDir = backupDir is null;
+        Clock = clock;
+        _keep = dbPath is not null;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Development");
         builder.UseSetting("ConnectionStrings:Default", $"Data Source={DbPath}");
+        builder.UseSetting("Backups:Directory", BackupDir);
+        builder.UseSetting("Attachments:Directory", AttachDir);
+        if (Clock is not null)
+            builder.ConfigureServices(s =>
+            {
+                s.RemoveAll<TimeProvider>();
+                s.AddSingleton<TimeProvider>(Clock);
+            });
     }
 
     protected override void Dispose(bool disposing)
     {
         base.Dispose(disposing);
         Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-        if (_keepDb) return;
-        foreach (var suffix in new[] { "", "-wal", "-shm" })
-            try { File.Delete(DbPath + suffix); } catch { /* best effort */ }
+        if (!_keep)
+            foreach (var suffix in new[] { "", "-wal", "-shm" })
+                try { File.Delete(DbPath + suffix); } catch { /* best effort */ }
+        try { if (Directory.Exists(AttachDir)) Directory.Delete(AttachDir, true); } catch { /* best effort */ }
+        if (_ownsBackupDir)
+            try { if (Directory.Exists(BackupDir)) Directory.Delete(BackupDir, true); } catch { /* best effort */ }
     }
+}
+
+/// <summary>A controllable clock and time zone, so date-dependent behaviour is deterministic.</summary>
+public sealed class FixedTimeProvider(DateTimeOffset start, TimeZoneInfo? zone = null) : TimeProvider
+{
+    private DateTimeOffset _now = start;
+    public void Set(DateTimeOffset t) => _now = t;
+    public override DateTimeOffset GetUtcNow() => _now;
+    public override TimeZoneInfo LocalTimeZone => zone ?? TimeZoneInfo.Utc;
 }
 
 public class ApiTests : IDisposable
@@ -249,7 +279,7 @@ public class ApiTests : IDisposable
         var c = await CreateTask(new { title = "c" });
         await _http.PatchAsync($"/api/tasks/{c.Id}/toggle", null);
         var s = (await _http.GetFromJsonAsync<StatsDto>("/api/tasks/stats", Json))!;
-        Assert.Equal(new StatsDto(3, 1, 2, 1, 1), s);
+        Assert.Equal(new StatsDto(3, 1, 2, 1, 1, 0, 0, 0), s);
         Assert.NotNull(a);
     }
 

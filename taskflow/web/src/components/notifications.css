@@ -1,0 +1,16 @@
+.bell { position: relative; }
+.bell-btn { position: relative; border: 1px solid var(--control); border-radius: 999px; width: 2.4rem; height: 2.4rem; display: inline-grid; place-items: center; background: var(--card); }
+.bell-badge { position: absolute; top: -5px; right: -5px; min-width: 1.2rem; height: 1.2rem; padding: 0 0.3rem; border-radius: 999px; background: var(--danger); color: var(--bg); font-size: 0.7rem; font-weight: 700; display: grid; place-items: center; }
+.bell-panel { position: absolute; right: 0; top: calc(100% + 8px); width: min(400px, calc(100vw - 1.5rem)); max-height: min(80vh, 620px); overflow-y: auto; background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 0.6rem 0.8rem 0.8rem; z-index: 90; }
+@media (max-width: 600px) { .bell-panel { position: fixed; left: 0.75rem; right: 0.75rem; top: 3.6rem; width: auto; } }
+.bell-panel h3 { margin: 0.6rem 0 0.3rem; font-size: 0.9rem; }
+.bell-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
+.bell-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.3rem; }
+.bell-item { display: flex; align-items: flex-start; gap: 0.2rem; padding: 0.45rem 0.5rem; border-radius: var(--radius-sm); border: 1px solid var(--border); border-left: 3px solid var(--border); }
+.bell-item.unread { background: var(--accent-soft); border-left-color: var(--accent); }
+.bell-item.kind-Overdue { border-left-color: var(--danger); }
+.bell-main { flex: 1; min-width: 0; display: grid; gap: 0.1rem; }
+.bell-title { font-weight: 600; overflow-wrap: anywhere; }
+.bell-prefs { border: 1px solid var(--border); border-radius: var(--radius-sm); margin: 0.8rem 0 0; padding: 0.4rem 0.7rem; display: grid; gap: 0.3rem; }
+.bell-footer { margin-bottom: 0; }
+.bell-empty { text-align: center; padding: 0.8rem 0; }

@@ -1,0 +1,32 @@
+.kb-toolbar { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; align-items: center; }
+.kb-board { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.9rem; align-items: start; }
+.kb-col { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 0.6rem; min-width: 0; display: grid; gap: 0.5rem; }
+.kb-col.drop { outline: 2px dashed var(--accent); background: var(--accent-soft); }
+.kb-colhead { display: flex; align-items: center; gap: 0.5rem; }
+.kb-colhead h3 { margin: 0; font-size: 1rem; }
+.kb-count { background: var(--bg); border-radius: 999px; padding: 0 0.5rem; font-size: 0.8rem; color: var(--muted); }
+.kb-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.5rem; min-height: 2.5rem; }
+.kb-card { background: var(--card); border: 1px solid var(--border); border-left: 4px solid var(--border); border-radius: var(--radius-sm); padding: 0.55rem 0.65rem; box-shadow: var(--shadow); cursor: grab; display: grid; gap: 0.35rem; }
+.kb-card[data-priority='Urgent'] { border-left-color: var(--danger); }
+.kb-card[data-priority='High'] { border-left-color: var(--warn); }
+.kb-card[data-priority='Medium'] { border-left-color: var(--accent-bg); }
+.kb-card.dragging { opacity: 0.4; }
+.kb-card.done .kb-title { text-decoration: line-through; color: var(--muted); }
+.kb-title { font-weight: 600; overflow-wrap: anywhere; display: flex; gap: 0.3rem; align-items: center; }
+.kb-title button { text-align: left; }
+.kb-meta { display: flex; flex-wrap: wrap; gap: 0.3rem; font-size: 0.72rem; }
+.kb-meta > span { padding: 0.05rem 0.45rem; border-radius: 999px; border: 1px solid var(--border); display: inline-flex; align-items: center; gap: 0.2rem; }
+.kb-meta .overdue { color: var(--danger); border-color: var(--danger); font-weight: 600; }
+.kb-meta .p-urgent, .kb-meta .p-high { color: var(--danger); border-color: var(--danger); }
+.kb-meta .p-medium { color: var(--warn); }
+.kb-meta .cat { border-color: var(--cat); }
+.kb-meta .tag { border-color: var(--tag); }
+.kb-move { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.kb-move button { font-size: 0.72rem; padding: 0.1rem 0.5rem; }
+.kb-add { display: flex; gap: 0.35rem; }
+.kb-add input { flex: 1; min-width: 0; }
+.kb-more { justify-self: start; }
+@media (max-width: 900px) {
+  .kb-board { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; gap: 0.7rem; padding-bottom: 0.5rem; }
+  .kb-col { flex: 0 0 86%; scroll-snap-align: start; }
+}

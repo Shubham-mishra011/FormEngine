@@ -1,131 +1,176 @@
-import { useEffect, useRef } from 'react'
-import type { Priority, SortKey } from './api'
-import { Sidebar } from './components/Sidebar'
-import { TaskForm } from './components/TaskForm'
-import { TaskRow } from './components/TaskRow'
-import { useTaskFlow } from './useTaskFlow'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { CommandPalette, type Command } from './components/CommandPalette'
+import { Icon } from './components/Icon'
+import { Modal } from './components/Modal'
+import { NotificationBell } from './components/NotificationBell'
+import { QUICK_ADD_EVENT, QuickAdd } from './components/QuickAdd'
+import { SideNav } from './components/SideNav'
+import { TaskEditorProvider, useTaskEditor } from './components/TaskEditor'
+import { ThemeToggle } from './components/ThemeToggle'
+import { FocusMiniTimer, FocusProvider } from './focus/FocusProvider'
+import { AnalyticsPage } from './pages/AnalyticsPage'
+import { CalendarPage } from './pages/CalendarPage'
+import { DashboardPage } from './pages/DashboardPage'
+import { FocusPage } from './pages/FocusPage'
+import { KanbanPage } from './pages/KanbanPage'
+import { ManagePage } from './pages/ManagePage'
+import { SettingsPage } from './pages/SettingsPage'
+import { TasksPage } from './pages/TasksPage'
+import { SettingsProvider, useSettings, type Settings } from './useSettings'
+import { ShortcutTable, useGlobalShortcuts } from './shortcuts'
+import { TaskFlowProvider, useTaskFlow } from './useTaskFlow'
+import { ToastProvider, Toasts } from './useToast'
+import { useRoute, type Route } from './useRoute'
+import { useTheme } from './useTheme'
+
+/** Every context the pages need. Tests render a single page inside this instead of the whole shell. */
+export function Providers({ children, settings }: { children: ReactNode; settings?: Partial<Settings> }) {
+  return (
+    <ToastProvider>
+      <SettingsProvider initial={settings}>
+        <TaskFlowProvider>
+          <FocusProvider>
+            <TaskEditorProvider>{children}</TaskEditorProvider>
+          </FocusProvider>
+        </TaskFlowProvider>
+      </SettingsProvider>
+      <Toasts />
+    </ToastProvider>
+  )
+}
 
 export default function App() {
-  const tf = useTaskFlow()
-  const { query, setQuery } = tf
-  const filtered = query.q !== '' || query.categoryId !== null || query.priority !== null || query.status !== 'all'
-  const searchRef = useRef<HTMLInputElement>(null)
+  return (
+    <Providers>
+      <Shell />
+    </Providers>
+  )
+}
 
-  // "/" jumps to search, unless the user is already typing in a field.
+const TITLES: Record<Route, string> = {
+  dashboard: 'Dashboard', tasks: 'My Tasks', inbox: 'Inbox', today: 'Today', upcoming: 'Upcoming', calendar: 'Calendar',
+  kanban: 'Kanban', completed: 'Completed', categories: 'Categories', tags: 'Tags', analytics: 'Analytics', focus: 'Focus', settings: 'Settings',
+}
+
+function Shell() {
+  const store = useTaskFlow()
+  const theme = useTheme()
+  const { settings } = useSettings()
+  const editor = useTaskEditor()
+  const { route, param, go } = useRoute(settings.defaultView)
+  const [navOpen, setNavOpen] = useState(false)
+  const [palette, setPalette] = useState(false)
+  const [help, setHelp] = useState(false)
+
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement
-      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable) return
-      e.preventDefault()
-      searchRef.current?.focus()
-    }
+    document.title = `${TITLES[route]} · TaskFlow`
+  }, [route])
+
+  const handlers = useMemo(
+    () => ({
+      palette: () => setPalette(true),
+      quickAdd: () => window.dispatchEvent(new Event(QUICK_ADD_EVENT)),
+      newTask: () => editor.open({}),
+      help: () => setHelp(true),
+      go,
+    }),
+    [editor, go],
+  )
+  useGlobalShortcuts(handlers)
+
+  // Escape closes the mobile drawer.
+  useEffect(() => {
+    if (!navOpen) return
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setNavOpen(false)
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [navOpen])
+
+  const commands = useMemo<Command[]>(() => {
+    const nav = (Object.keys(TITLES) as Route[]).map<Command>((r) => ({
+      id: `go-${r}`, label: `Go to ${TITLES[r]}`, group: 'Go to', keywords: r, run: () => go(r),
+    }))
+    return [
+      { id: 'new-task', label: 'New task', group: 'Actions', shortcut: 'N', keywords: 'add create', run: () => editor.open({}) },
+      { id: 'quick-add', label: 'Quick add a task', group: 'Actions', shortcut: 'Q', run: () => window.dispatchEvent(new Event(QUICK_ADD_EVENT)) },
+      { id: 'focus-start', label: 'Start a focus session', group: 'Actions', keywords: 'pomodoro timer', run: () => go('focus') },
+      { id: 'backup', label: 'Create or restore a backup', group: 'Actions', keywords: 'export import data', run: () => go('settings', 'backup') },
+      { id: 'help', label: 'Keyboard shortcuts', group: 'Actions', shortcut: '?', run: () => setHelp(true) },
+      ...nav,
+      { id: 'theme-light', label: 'Theme: Light', group: 'Theme', keywords: 'appearance', run: () => theme.choose('light') },
+      { id: 'theme-dark', label: 'Theme: Dark', group: 'Theme', keywords: 'appearance night', run: () => theme.choose('dark') },
+      { id: 'theme-system', label: 'Theme: Match system', group: 'Theme', keywords: 'appearance auto', run: () => theme.choose('system') },
+    ]
+  }, [go, editor, theme])
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <h1>TaskFlow</h1>
-        {tf.stats && (
-          <p className="summary">
-            {tf.stats.active} active · {tf.stats.completed} done
-          </p>
-        )}
-      </header>
-
-      {tf.error && (
-        <div className="banner" role="alert">
-          <span>{tf.error}</span>
-          <button onClick={tf.dismissError}>Dismiss</button>
-          <button onClick={() => void tf.reload()}>Retry</button>
+    <div className={`shell${navOpen ? ' nav-open' : ''}`}>
+      <a href="#main" className="skip-link" onClick={(e) => { e.preventDefault(); document.getElementById('main')?.focus() }}>
+        Skip to content
+      </a>
+      <aside className="side" aria-label="Sidebar">
+        <div className="brand">
+          <span className="brand-mark"><Icon name="check" /></span>
+          TaskFlow
         </div>
-      )}
+        <SideNav route={route} stats={store.stats} onNavigate={() => setNavOpen(false)} />
+      </aside>
+      <div className="scrim" onClick={() => setNavOpen(false)} aria-hidden="true" />
 
-      <div className="layout">
-        <Sidebar
-          categories={tf.categories}
-          stats={tf.stats}
-          status={query.status}
-          categoryId={query.categoryId}
-          onStatus={(status) => setQuery({ ...query, status })}
-          onCategory={(categoryId) => setQuery({ ...query, categoryId })}
-          onAddCategory={tf.createCategory}
-          onDeleteCategory={(id) => void tf.deleteCategory(id)}
-        />
+      <div className="main-col">
+        <header className="topbar">
+          <button type="button" className="menu-btn icon-btn" aria-label="Open navigation" aria-expanded={navOpen} onClick={() => setNavOpen(true)}>
+            <Icon name="menu" />
+          </button>
+          <QuickAdd />
+          <span className="spacer" />
+          <FocusMiniTimer />
+          <button type="button" className="icon-btn" aria-label="Open command palette (Ctrl+K)" title="Command palette (Ctrl+K)" onClick={() => setPalette(true)}>
+            <Icon name="search" />
+          </button>
+          <NotificationBell />
+          <ThemeToggle preference={theme.preference} onChange={theme.choose} />
+        </header>
 
-        <main>
-          <section aria-label="Add task" className="card">
-            <TaskForm categories={tf.categories} submitLabel="Add task" onSubmit={tf.createTask} />
-          </section>
-
-          <div className="toolbar">
-            <input
-              ref={searchRef}
-              type="search"
-              aria-label="Search tasks"
-              placeholder="Search tasks…  ( / )"
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') setQuery({ ...query, q: '' })
-              }}
-              value={query.q}
-              onChange={(e) => setQuery({ ...query, q: e.target.value })}
-            />
-            <select
-              aria-label="Filter by priority"
-              value={query.priority ?? ''}
-              onChange={(e) => setQuery({ ...query, priority: (e.target.value || null) as Priority | null })}
-            >
-              <option value="">Any priority</option>
-              <option>High</option>
-              <option>Medium</option>
-              <option>Low</option>
-            </select>
-            <select
-              aria-label="Sort by"
-              value={query.sort}
-              onChange={(e) => setQuery({ ...query, sort: e.target.value as SortKey })}
-            >
-              <option value="created_desc">Newest first</option>
-              <option value="due">Due date</option>
-              <option value="priority">Priority</option>
-              <option value="title">Title (A–Z)</option>
-            </select>
-            <button
-              onClick={() => {
-                if (window.confirm('Delete all completed tasks?')) void tf.clearCompleted()
-              }}
-              disabled={!tf.stats?.completed}
-            >
-              Clear completed
-            </button>
+        {store.error && (
+          <div className="banner page-banner" role="alert">
+            <span>{store.error}</span>
+            <button onClick={store.dismissError}>Dismiss</button>
+            <button onClick={() => void store.reload()}>Retry</button>
           </div>
+        )}
 
-          {tf.loading ? (
-            <p className="empty" role="status">
-              Loading…
-            </p>
-          ) : tf.tasks.length === 0 ? (
-            <p className="empty" role="status">
-              {filtered ? 'No tasks match these filters.' : 'No tasks yet — add your first one above.'}
-            </p>
-          ) : (
-            <ul className="tasks">
-              {tf.tasks.map((t) => (
-                <TaskRow
-                  key={t.id}
-                  task={t}
-                  categories={tf.categories}
-                  onToggle={(id) => void tf.toggleTask(id)}
-                  onDelete={(id) => void tf.deleteTask(id)}
-                  onUpdate={tf.updateTask}
-                />
-              ))}
-            </ul>
-          )}
+        <main id="main" tabIndex={-1} className={`page${route === 'calendar' || route === 'kanban' ? ' wide' : ''}`}>
+          <Page route={route} param={param} />
         </main>
       </div>
+
+      {palette && <CommandPalette commands={commands} onClose={() => setPalette(false)} />}
+      {help && (
+        <Modal title="Keyboard shortcuts" onClose={() => setHelp(false)}>
+          <ShortcutTable />
+        </Modal>
+      )}
     </div>
   )
+}
+
+function Page({ route, param }: { route: Route; param: string | null }) {
+  const store = useTaskFlow()
+  const reload = useCallback(() => void store.reload(), [store])
+  switch (route) {
+    case 'dashboard': return <DashboardPage />
+    case 'tasks':
+    case 'inbox':
+    case 'today':
+    case 'upcoming':
+    case 'completed': return <TasksPage key={route} route={route} />
+    case 'calendar': return <CalendarPage />
+    case 'kanban': return <KanbanPage />
+    case 'categories': return <ManagePage kind="category" />
+    case 'tags': return <ManagePage kind="tag" />
+    case 'analytics': return <AnalyticsPage />
+    case 'focus': return <FocusPage />
+    case 'settings': return <SettingsPage section={param} onDataChanged={reload} />
+  }
 }

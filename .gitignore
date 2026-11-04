@@ -1,0 +1,55 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Build outputs
+build
+coverage
+*.tsbuildinfo
+
+# Environment files / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS-generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Local toolchain and database (E: only)
+.tools/
+data/*.db
+
+# .NET
+bin/
+obj/
+data/*.db-shm
+data/*.db-wal
+
+# Personal TaskFlow data (databases, backups, attachments, run state)
+/data/

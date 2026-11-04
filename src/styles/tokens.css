@@ -1,0 +1,21 @@
+/* Design tokens. Temporary values for the technical prototype. */
+:root {
+  --color-black: #000;
+  --color-ink: #f2f3f5;
+  --color-silver: #aeb3ba;
+  --color-steel: #5b6068;
+  --color-line: rgb(255 255 255 / 0.16);
+
+  --font-sans: 'Segoe UI', system-ui, -apple-system, 'Helvetica Neue', Arial, sans-serif;
+
+  --gutter: clamp(1rem, 4vw, 3rem);
+
+  --duration-fast: 200ms;
+  --duration-slow: 600ms;
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
+
+  --z-stage: 0;
+  --z-content: 1;
+  --z-hud: 10;
+  --z-overlay: 20;
+}
